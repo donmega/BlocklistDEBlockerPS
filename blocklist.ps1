@@ -1,47 +1,43 @@
-# Define the URL of the blocklist.de file
-$blocklistUrl = "https://lists.blocklist.de/lists/all.txt"
+# Define the URL of the blocklist file
+$blocklist_url = "http://lists.blocklist.de/lists/all.txt"
 
-# Define the path where the blocklist file will be downloaded
-$downloadPath = "$env:TEMP\blocklist.txt"
+# Define the base name of the firewall rule
+$rule_base_name = "Blocklist.de"
 
-# Define the Windows Firewall rule name
-$firewallRuleNamePrefix = "Blocklist.de Rule"
+# Download the blocklist file and save it as a temporary file
+$blocklist_file = New-TemporaryFile
+Invoke-WebRequest -Uri $blocklist_url -OutFile $blocklist_file
 
-# Download the blocklist file
-Invoke-WebRequest -Uri $blocklistUrl -OutFile $downloadPath
+# Read the blocklist file and split it into lines
+$blocklist_lines = Get-Content $blocklist_file
 
-# Read the downloaded file and filter out empty lines and comments
-$ipAddresses = Get-Content $downloadPath | Where-Object { $_ -match '\d+\.\d+\.\d+\.\d+' }
+# Remove any empty lines or comments
+$blocklist_lines = $blocklist_lines | Where-Object {$_ -and $_ -notmatch "^#"}
 
-# Check if there are existing firewall rules with the specified name and delete them
-Get-NetFirewallRule | Where-Object { $_.DisplayName -like "$firewallRuleNamePrefix*" } | Remove-NetFirewallRule
+# Sort the blocklist lines and remove any duplicates
+$blocklist_lines = $blocklist_lines | Sort-Object -Unique
 
-# Define the maximum number of IP addresses per rule
-$maxAddressesPerRule = 10000
+# Delete the temporary file
+Remove-Item $blocklist_file
 
-# Split the IP addresses into batches of $maxAddressesPerRule
-$ipBatches = @{}
-foreach ($ip in $ipAddresses) {
-    $batchNumber = [math]::floor($ipAddresses.IndexOf($ip) / $maxAddressesPerRule)
-    $ipBatches[$batchNumber] += $ip
+# Check if the firewall rule already exists
+$rule = Get-NetFirewallRule -Name $rule_base_name -ErrorAction SilentlyContinue
+
+# If the rule exists, delete it
+if ($rule) {
+    Remove-NetFirewallRule -Name $rule_base_name
 }
 
-# Create a new firewall rule for each batch of IP addresses
-foreach ($batchNumber in $ipBatches.Keys) {
-    $ipAddressesInBatch = $ipBatches[$batchNumber]
-    
-    # Convert the IP addresses in batch to a valid format (IPv4 address range)
-    $ipAddressRange = $ipAddressesInBatch | ForEach-Object {
-        $ip = $_ -split '\.'
-        "{0}.{1}.{2}.0-{0}.{1}.{2}.255" -f $ip[0], $ip[1], $ip[2]
-    } | Sort-Object -Unique
+# Create a new firewall rule with the blocklist lines as remote addresses
+# Split the blocklist lines into batches of 10000 to avoid exceeding the limit
+$batch_size = 10000
+$batch_count = [Math]::Ceiling($blocklist_lines.Count / $batch_size)
 
-    # Create a new firewall rule
-    $ruleDisplayName = "$firewallRuleNamePrefix $batchNumber"
-    New-NetFirewallRule -DisplayName $ruleDisplayName -Direction Inbound -RemoteAddress $ipAddressRange -Action Block
+for ($i = 0; $i -lt $batch_count; $i++) {
+    $start_index = $i * $batch_size
+    $end_index = [Math]::Min(($i + 1) * $batch_size - 1, $blocklist_lines.Count - 1)
+    $remote_addresses = $blocklist_lines[$start_index..$end_index]
+
+    $rule_name = "$rule_base_name-$i"
+    New-NetFirewallRule -Name $rule_name -DisplayName $rule_name -Description "Block IPs from blocklist.de" -Direction Inbound -Action Block -RemoteAddress $remote_addresses
 }
-
-# Remove the downloaded blocklist file
-Remove-Item $downloadPath
-
-Write-Host "Blocklist.de firewall rules updated successfully."
