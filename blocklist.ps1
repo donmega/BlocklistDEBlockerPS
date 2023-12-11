@@ -4,6 +4,15 @@ $blocklist_url = "http://lists.blocklist.de/lists/all.txt"
 # Define the base name of the firewall rule
 $rule_base_name = "Blocklist.de"
 
+# Check if the firewall rule already exists
+$existingRules = Get-NetFirewallRule -Name "$rule_base_name-*" -ErrorAction SilentlyContinue
+
+# If rules exist, delete them
+if ($existingRules) {
+    $existingRules | Remove-NetFirewallRule
+    Write-Host "Existing firewall rules deleted."
+}
+
 # Download the blocklist file and save it as a temporary file
 $blocklist_file = New-TemporaryFile
 Invoke-WebRequest -Uri $blocklist_url -OutFile $blocklist_file
@@ -20,14 +29,6 @@ $blocklist_lines = $blocklist_lines | Sort-Object -Unique
 # Delete the temporary file
 Remove-Item $blocklist_file
 
-# Check if the firewall rule already exists
-$rule = Get-NetFirewallRule -Name $rule_base_name -ErrorAction SilentlyContinue
-
-# If the rule exists, delete it
-if ($rule) {
-    Remove-NetFirewallRule -Name $rule_base_name
-}
-
 # Create a new firewall rule with the blocklist lines as remote addresses
 # Split the blocklist lines into batches of 10000 to avoid exceeding the limit
 $batch_size = 10000
@@ -41,3 +42,5 @@ for ($i = 0; $i -lt $batch_count; $i++) {
     $rule_name = "$rule_base_name-$i"
     New-NetFirewallRule -Name $rule_name -DisplayName $rule_name -Description "Block IPs from blocklist.de" -Direction Inbound -Action Block -RemoteAddress $remote_addresses
 }
+
+Write-Host "Firewall rules created successfully."
